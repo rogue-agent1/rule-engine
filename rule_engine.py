@@ -1,64 +1,62 @@
 #!/usr/bin/env python3
-"""Rule engine: condition-action rules, forward chaining, conflict resolution."""
-import sys, re
+"""Rule Engine - Evaluate business rules with conditions and actions."""
+import sys, re, operator
 
-class Condition:
-    def __init__(self, field, op, value):
-        self.field,self.op,self.value = field,op,value
-    def evaluate(self, facts):
-        val = facts.get(self.field)
-        if val is None: return False
-        if self.op == "==": return val == self.value
-        if self.op == "!=": return val != self.value
-        if self.op == ">": return val > self.value
-        if self.op == "<": return val < self.value
-        if self.op == ">=": return val >= self.value
-        if self.op == "<=": return val <= self.value
-        if self.op == "in": return val in self.value
-        if self.op == "contains": return self.value in val
-        return False
+OPS = {"==": operator.eq, "!=": operator.ne, ">": operator.gt, "<": operator.lt,
+       ">=": operator.ge, "<=": operator.le, "in": lambda a,b: a in b, "contains": lambda a,b: b in str(a)}
 
 class Rule:
-    def __init__(self, name, conditions, actions, priority=0, salience=0):
-        self.name,self.conditions,self.actions = name,conditions,actions
-        self.priority,self.salience = priority,salience
-    def matches(self, facts): return all(c.evaluate(facts) for c in self.conditions)
+    def __init__(self, name, conditions, actions, priority=0):
+        self.name = name; self.conditions = conditions; self.actions = actions; self.priority = priority
+    def evaluate(self, facts):
+        for cond in self.conditions:
+            field, op, value = cond["field"], cond["op"], cond["value"]
+            fact_val = facts.get(field)
+            if fact_val is None: return False
+            if not OPS.get(op, lambda a,b: False)(fact_val, value): return False
+        return True
     def fire(self, facts):
-        for action in self.actions: action(facts)
+        results = []
+        for action in self.actions:
+            if action["type"] == "set": facts[action["field"]] = action["value"]; results.append(f"Set {action['field']}={action['value']}")
+            elif action["type"] == "log": results.append(f"Log: {action['message']}")
+            elif action["type"] == "alert": results.append(f"ALERT: {action['message']}")
+        return results
 
-class RuleEngine:
-    def __init__(self): self.rules = []; self.log = []
-    def add_rule(self, rule): self.rules.append(rule)
-    def run(self, facts, max_iterations=100):
-        fired = set()
-        for _ in range(max_iterations):
-            candidates = [(r.salience, r) for r in self.rules if r.name not in fired and r.matches(facts)]
-            if not candidates: break
-            candidates.sort(key=lambda x: -x[0])
-            _, rule = candidates[0]
-            rule.fire(facts); fired.add(rule.name)
-            self.log.append(f"Fired: {rule.name}")
-        return facts
+class Engine:
+    def __init__(self): self.rules = []
+    def add(self, rule): self.rules.append(rule); self.rules.sort(key=lambda r: -r.priority)
+    def run(self, facts, mode="all"):
+        fired = []
+        for rule in self.rules:
+            if rule.evaluate(facts):
+                results = rule.fire(facts)
+                fired.append((rule.name, results))
+                if mode == "first": break
+        return fired
 
 def main():
-    engine = RuleEngine()
-    engine.add_rule(Rule("high_value_customer",
-        [Condition("total_purchases",">",1000), Condition("years_active",">=",2)],
-        [lambda f: f.update({"tier":"gold","discount":0.15})], salience=10))
-    engine.add_rule(Rule("regular_customer",
-        [Condition("total_purchases",">",100)],
-        [lambda f: f.update({"tier":"silver","discount":0.05})], salience=5))
-    engine.add_rule(Rule("new_customer",
-        [Condition("years_active","<",1)],
-        [lambda f: f.update({"welcome_offer":True})], salience=3))
-    engine.add_rule(Rule("gold_free_shipping",
-        [Condition("tier","==","gold")],
-        [lambda f: f.update({"free_shipping":True})], salience=1))
-    facts = {"name":"Alice","total_purchases":1500,"years_active":3}
-    result = engine.run(facts)
-    print(f"  Customer: {result['name']}")
-    print(f"  Tier: {result.get('tier')}, Discount: {result.get('discount')}")
-    print(f"  Free shipping: {result.get('free_shipping')}")
-    print(f"  Rules fired: {engine.log}")
+    engine = Engine()
+    engine.add(Rule("VIP Discount", [{"field": "total", "op": ">=", "value": 100}, {"field": "tier", "op": "==", "value": "vip"}],
+        [{"type": "set", "field": "discount", "value": 0.2}, {"type": "log", "message": "20% VIP discount applied"}], priority=10))
+    engine.add(Rule("Bulk Discount", [{"field": "quantity", "op": ">=", "value": 10}],
+        [{"type": "set", "field": "discount", "value": 0.1}, {"type": "log", "message": "10% bulk discount"}], priority=5))
+    engine.add(Rule("Fraud Alert", [{"field": "total", "op": ">", "value": 5000}],
+        [{"type": "alert", "message": "High-value order needs review"}], priority=20))
+    print("=== Rule Engine ===\n")
+    orders = [
+        {"customer": "Alice", "total": 150, "quantity": 3, "tier": "vip"},
+        {"customer": "Bob", "total": 50, "quantity": 15, "tier": "basic"},
+        {"customer": "Charlie", "total": 7500, "quantity": 1, "tier": "basic"},
+    ]
+    for order in orders:
+        print(f"Order from {order['customer']} (${order['total']}, qty={order['quantity']}):")
+        fired = engine.run(dict(order))
+        for name, results in fired:
+            print(f"  Rule '{name}':"); 
+            for r in results: print(f"    {r}")
+        if not fired: print("  No rules fired")
+        print()
 
-if __name__ == "__main__": main()
+if __name__ == "__main__":
+    main()

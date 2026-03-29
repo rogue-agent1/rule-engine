@@ -1,9 +1,13 @@
-# Business Rule Engine
+# rule-engine
 
-Business Rule Engine — zero-dependency Python implementation.
+Business Rule Engine. Zero-dependency, single-file Python CLI.
 
 ## Usage
 
 ```bash
-python3 rule_engine.py
+python3 rule_engine.py --help
 ```
+
+## License
+
+MIT
