@@ -1,62 +1,76 @@
-#!/usr/bin/env python3
-"""Rule Engine - Evaluate business rules with conditions and actions."""
-import sys, re, operator
+import argparse, json, re, operator
 
-OPS = {"==": operator.eq, "!=": operator.ne, ">": operator.gt, "<": operator.lt,
-       ">=": operator.ge, "<=": operator.le, "in": lambda a,b: a in b, "contains": lambda a,b: b in str(a)}
+OPS = {
+    "==": operator.eq, "!=": operator.ne,
+    ">": operator.gt, ">=": operator.ge,
+    "<": operator.lt, "<=": operator.le,
+    "in": lambda a, b: a in b,
+    "contains": lambda a, b: b in a,
+    "startswith": lambda a, b: str(a).startswith(str(b)),
+    "matches": lambda a, b: bool(re.search(b, str(a))),
+}
 
 class Rule:
-    def __init__(self, name, conditions, actions, priority=0):
-        self.name = name; self.conditions = conditions; self.actions = actions; self.priority = priority
+    def __init__(self, name, conditions, action, priority=0):
+        self.name = name; self.conditions = conditions
+        self.action = action; self.priority = priority
     def evaluate(self, facts):
         for cond in self.conditions:
             field, op, value = cond["field"], cond["op"], cond["value"]
-            fact_val = facts.get(field)
-            if fact_val is None: return False
-            if not OPS.get(op, lambda a,b: False)(fact_val, value): return False
+            actual = facts.get(field)
+            if actual is None: return False
+            if not OPS.get(op, lambda a, b: False)(actual, value):
+                return False
         return True
-    def fire(self, facts):
-        results = []
-        for action in self.actions:
-            if action["type"] == "set": facts[action["field"]] = action["value"]; results.append(f"Set {action['field']}={action['value']}")
-            elif action["type"] == "log": results.append(f"Log: {action['message']}")
-            elif action["type"] == "alert": results.append(f"ALERT: {action['message']}")
-        return results
 
-class Engine:
-    def __init__(self): self.rules = []
-    def add(self, rule): self.rules.append(rule); self.rules.sort(key=lambda r: -r.priority)
-    def run(self, facts, mode="all"):
+class RuleEngine:
+    def __init__(self):
+        self.rules = []
+    def add_rule(self, rule):
+        self.rules.append(rule)
+        self.rules.sort(key=lambda r: -r.priority)
+    def evaluate(self, facts, mode="all"):
         fired = []
         for rule in self.rules:
             if rule.evaluate(facts):
-                results = rule.fire(facts)
-                fired.append((rule.name, results))
+                fired.append(rule)
                 if mode == "first": break
         return fired
 
 def main():
-    engine = Engine()
-    engine.add(Rule("VIP Discount", [{"field": "total", "op": ">=", "value": 100}, {"field": "tier", "op": "==", "value": "vip"}],
-        [{"type": "set", "field": "discount", "value": 0.2}, {"type": "log", "message": "20% VIP discount applied"}], priority=10))
-    engine.add(Rule("Bulk Discount", [{"field": "quantity", "op": ">=", "value": 10}],
-        [{"type": "set", "field": "discount", "value": 0.1}, {"type": "log", "message": "10% bulk discount"}], priority=5))
-    engine.add(Rule("Fraud Alert", [{"field": "total", "op": ">", "value": 5000}],
-        [{"type": "alert", "message": "High-value order needs review"}], priority=20))
-    print("=== Rule Engine ===\n")
-    orders = [
-        {"customer": "Alice", "total": 150, "quantity": 3, "tier": "vip"},
-        {"customer": "Bob", "total": 50, "quantity": 15, "tier": "basic"},
-        {"customer": "Charlie", "total": 7500, "quantity": 1, "tier": "basic"},
-    ]
-    for order in orders:
-        print(f"Order from {order['customer']} (${order['total']}, qty={order['quantity']}):")
-        fired = engine.run(dict(order))
-        for name, results in fired:
-            print(f"  Rule '{name}':"); 
-            for r in results: print(f"    {r}")
-        if not fired: print("  No rules fired")
-        print()
+    p = argparse.ArgumentParser(description="Rule engine")
+    p.add_argument("--demo", action="store_true")
+    p.add_argument("--file", help="JSON rules file")
+    args = p.parse_args()
+    if args.demo:
+        engine = RuleEngine()
+        engine.add_rule(Rule("VIP Discount", [
+            {"field": "total", "op": ">=", "value": 100},
+            {"field": "membership", "op": "==", "value": "gold"}
+        ], "Apply 20% discount", priority=2))
+        engine.add_rule(Rule("Free Shipping", [
+            {"field": "total", "op": ">=", "value": 50}
+        ], "Free shipping", priority=1))
+        engine.add_rule(Rule("New Customer", [
+            {"field": "orders", "op": "==", "value": 0}
+        ], "Welcome 10% coupon", priority=3))
+        engine.add_rule(Rule("Fraud Check", [
+            {"field": "total", "op": ">", "value": 500},
+            {"field": "country", "op": "!=", "value": "US"}
+        ], "Flag for review", priority=10))
+        tests = [
+            {"total": 150, "membership": "gold", "orders": 5, "country": "US"},
+            {"total": 75, "membership": "silver", "orders": 0, "country": "US"},
+            {"total": 600, "membership": "basic", "orders": 2, "country": "UK"},
+        ]
+        for facts in tests:
+            fired = engine.evaluate(facts)
+            print(f"Facts: {facts}")
+            for rule in fired:
+                print(f"  ✅ {rule.name}: {rule.action}")
+            if not fired: print("  (no rules fired)")
+            print()
+    else: p.print_help()
 
 if __name__ == "__main__":
     main()
